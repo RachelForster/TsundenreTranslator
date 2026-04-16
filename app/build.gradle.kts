@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.moe.tsunderetranslator"
-        minSdk = 31
+        minSdk = 35
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -48,7 +48,9 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation("com.google.dagger:hilt-android:2.51.1")
+    implementation(libs.androidx.appcompat)
     ksp("com.google.dagger:hilt-compiler:2.51.1") // 确保是 ksp
+    implementation(libs.moonshine.voice)
 
     // 如果你用了 Compose 导航，建议也带上这个
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")

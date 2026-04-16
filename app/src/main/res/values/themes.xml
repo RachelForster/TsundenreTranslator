@@ -2,4 +2,5 @@
 <resources>
 
     <style name="Theme.TsundereTranslator" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="PR" parent="Theme.AppCompat.DayNight.DarkActionBar"/>
 </resources>

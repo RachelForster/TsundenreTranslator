@@ -1,5 +1,6 @@
 package com.moe.tsunderetranslator.data.repository
 
+import com.moe.tsunderetranslator.domain.model.AsrResult
 import com.moe.tsunderetranslator.domain.provider.AsrProvider
 import javax.inject.Inject
 

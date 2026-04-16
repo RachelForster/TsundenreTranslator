@@ -2,6 +2,7 @@ package com.moe.tsunderetranslator
 
 import android.Manifest
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,7 +26,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (!isGranted) {
-            // 这里可以处理用户拒绝权限的情况
+            Toast.makeText(this, "请打开录音权限以使用语音输入", Toast.LENGTH_SHORT)
         }
     }
 
@@ -51,7 +52,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AsrScreen(viewModel: AsrViewModel) {
     // 观察 ASR 结果文本
-    val asrText by viewModel.asrText.collectAsState()
+    val asrText by viewModel.uiText.collectAsState()
     var isRecording by remember { mutableStateOf(false) }
 
     Column(
@@ -63,7 +64,7 @@ fun AsrScreen(viewModel: AsrViewModel) {
     ) {
         // 对应文本显示区域 (替代传统的 TextView)
         Text(
-            text = if (asrText.toString().isEmpty()) "点击下方按钮开始说话" else asrText.toString(),
+            text = if (asrText.isEmpty()) "点击下方按钮开始说话" else asrText,
             style = MaterialTheme.typography.bodyLarge,
             modifier = Modifier
                 .fillMaxWidth()

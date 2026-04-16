@@ -3,24 +3,45 @@ package com.moe.tsunderetranslator
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.moe.tsunderetranslator.data.repository.AsrRepository
+import com.moe.tsunderetranslator.domain.model.AsrResult
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class AsrViewModel @Inject constructor(
     private val repository: AsrRepository
 ) : ViewModel() {
-    // 将 Repository 的 Flow 转化为 Compose 可观察的 State
-    val asrText = repository.currentText
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    // 1. 内部变量：保存已经识别完成的历史文本
+    private var historyText = ""
+
+    // 2. 对外暴露的 UI 状态流
+    private val _uiText = MutableStateFlow("")
+    val uiText: StateFlow<String> = _uiText.asStateFlow()
+
+    init {
+        // 3. 订阅 Repository 的 ASR 结果并处理拼接逻辑
+        viewModelScope.launch {
+            repository.currentText.collect { result ->
+                if (result.isFinal) {
+                    // 如果识别结束，将当前结果永久存入历史
+                    historyText += result.text
+                    _uiText.value = historyText
+                } else {
+                    // 如果还在识别中，显示：历史记录 + 当前正在跳动的文字
+                    _uiText.value = historyText + result.text
+                }
+            }
+        }
+    }
 
     fun toggleAsr(isRecording: Boolean) {
         if (isRecording) {
-            repository.stop()
+            repository.stop() //
         } else {
-            repository.start()
+            repository.start() //
         }
     }
 }
