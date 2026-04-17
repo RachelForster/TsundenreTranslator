@@ -41,7 +41,7 @@ fun ChatInputBar(
                 placeholder = { Text("Type a message") },
                 shape = RoundedCornerShape(50),
                 minLines = 1,
-                maxLines = 5
+                maxLines = 1,
             )
 
             // 语音按钮
