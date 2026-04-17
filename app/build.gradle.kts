@@ -12,12 +12,18 @@ android {
 
     defaultConfig {
         applicationId = "com.moe.tsunderetranslator"
-        minSdk = 31
+        minSdk = 29
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{DEPENDENCIES,LICENSE,LICENSE.txt,NOTICE,NOTICE.txt}"
+        }
     }
 
     buildTypes {
@@ -52,6 +58,7 @@ dependencies {
 
     // 如果你用了 Compose 导航，建议也带上这个
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+    implementation(libs.openai.java)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20231013")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
