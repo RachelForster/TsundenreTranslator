@@ -1,9 +1,8 @@
-package com.moe.tsunderetranslator
+package com.moe.tsunderetranslator.ui.screens.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.moe.tsunderetranslator.data.repository.AsrRepository
-import com.moe.tsunderetranslator.domain.model.AsrResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -39,9 +38,9 @@ class AsrViewModel @Inject constructor(
 
     fun toggleAsr(isRecording: Boolean) {
         if (isRecording) {
-            repository.stop() //
+            repository.start()
         } else {
-            repository.start() //
+            repository.stop()
         }
     }
 }

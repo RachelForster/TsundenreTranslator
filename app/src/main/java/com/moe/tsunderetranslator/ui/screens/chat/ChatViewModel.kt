@@ -1,4 +1,4 @@
-package com.moe.tsunderetranslator
+package com.moe.tsunderetranslator.ui.screens.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
