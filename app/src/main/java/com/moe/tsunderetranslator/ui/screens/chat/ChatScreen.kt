@@ -42,11 +42,24 @@ fun ChatScreen(viewModel: ChatViewModel, asrViewModel: AsrViewModel) {
                 asrText = asrText,
                 isRecording = isRecording,
                 isSending = uiState.isSending,
-                onValueChange = viewModel::updateInput,
+                onValueChange = {
+                    viewModel.updateInput(it)
+                    asrViewModel.setInput(it)
+                },
                 onVoiceToggle = {
                     isRecording = !isRecording
-                    asrViewModel.toggleAsr(isRecording)},
-                onSendClick = viewModel::sendMessage
+                    if (isRecording){
+                        asrViewModel.setInput(uiState.input)
+                    }
+                    else (
+                        viewModel.updateInput(asrText)
+                    )
+                    asrViewModel.toggleAsr(isRecording)
+                                },
+                onSendClick = {
+                    asrViewModel.clearInput()
+                    viewModel.sendMessage()
+                }
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }

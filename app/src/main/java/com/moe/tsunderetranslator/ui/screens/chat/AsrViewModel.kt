@@ -43,4 +43,14 @@ class AsrViewModel @Inject constructor(
             repository.stop()
         }
     }
+
+    fun clearInput(){
+        historyText = ""
+        _uiText.value = ""
+    }
+
+    fun setInput(input: String){
+        historyText = input
+        _uiText.value = input
+    }
 }
