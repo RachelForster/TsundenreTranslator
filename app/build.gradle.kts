@@ -54,11 +54,12 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation("com.google.dagger:hilt-android:2.51.1")
+    implementation(libs.androidx.appcompat)
     ksp("com.google.dagger:hilt-compiler:2.51.1") // 确保是 ksp
+    implementation(libs.moonshine.voice)
 
     // 如果你用了 Compose 导航，建议也带上这个
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
-    implementation(libs.openai.java)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20231013")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

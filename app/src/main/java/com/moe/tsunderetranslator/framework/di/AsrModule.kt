@@ -1,7 +1,7 @@
 package com.moe.tsunderetranslator.framework.di
 
 import com.moe.tsunderetranslator.domain.provider.AsrProvider
-import com.moe.tsunderetranslator.framework.asr.WenetAsrImpl
+import com.moe.tsunderetranslator.framework.asr.MoonshineVoiceAsrProviderImpl
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -15,6 +15,6 @@ abstract class AsrModule {
     @Binds
     @Singleton
     abstract fun bindAsrProvider(
-        wenetAsrImpl: WenetAsrImpl
+        moonshineVoiceAsrProviderImpl: MoonshineVoiceAsrProviderImpl
     ): AsrProvider
 }
