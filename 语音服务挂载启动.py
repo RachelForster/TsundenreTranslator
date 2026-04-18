@@ -12,6 +12,13 @@ CHARACTER_ROOT = SCRIPT_DIR / "CharacterModels"
 GENIE_DATA_DIR = SCRIPT_DIR / "GenieData"
 
 
+def pause_before_exit() -> None:
+    try:
+        input("按回车键退出...")
+    except EOFError:
+        pass
+
+
 def print_usage_and_exit() -> None:
     expected_layout = f"""当前启动目录不正确，无法找到服务所需目录。
 
@@ -38,6 +45,7 @@ def print_usage_and_exit() -> None:
 3. 再运行本脚本
 """
     print(expected_layout)
+    pause_before_exit()
     raise SystemExit(1)
 
 
