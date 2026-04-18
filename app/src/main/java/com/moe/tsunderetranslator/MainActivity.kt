@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import com.moe.tsunderetranslator.ui.screens.chat.AsrViewModel
 import com.moe.tsunderetranslator.ui.screens.chat.ChatScreen
 import com.moe.tsunderetranslator.ui.screens.chat.ChatViewModel
+import com.moe.tsunderetranslator.ui.screens.chat.TtsViewModel
 import com.moe.tsunderetranslator.ui.theme.TsundereTranslatorTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -22,6 +23,7 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: ChatViewModel by viewModels()
     private val asrViewModel: AsrViewModel by viewModels()
+    private val ttsViewModel: TtsViewModel by viewModels()
 
     // 录音权限请求器
     private val requestPermissionLauncher = registerForActivityResult(
@@ -44,7 +46,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ChatScreen(viewModel, asrViewModel)
+                    ChatScreen(viewModel, asrViewModel,ttsViewModel)
                 }
             }
         }

@@ -10,7 +10,7 @@ import com.moe.tsunderetranslator.ui.components.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(viewModel: ChatViewModel, asrViewModel: AsrViewModel) {
+fun ChatScreen(viewModel: ChatViewModel, asrViewModel: AsrViewModel, ttsViewModel: TtsViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val asrText by asrViewModel.uiText.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -67,7 +67,8 @@ fun ChatScreen(viewModel: ChatViewModel, asrViewModel: AsrViewModel) {
         MessageList(
             modifier = Modifier.padding(padding),
             messages = uiState.messages,
-            isSending = uiState.isSending
+            isSending = uiState.isSending,
+            onTtsClick = ttsViewModel::speakText
         )
     }
 

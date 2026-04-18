@@ -1,6 +1,7 @@
 package com.moe.tsunderetranslator.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,7 +22,8 @@ import com.moe.tsunderetranslator.domain.model.ChatRole
 fun MessageList(
     modifier: Modifier = Modifier,
     messages: List<ChatMessage>,
-    isSending: Boolean
+    isSending: Boolean,
+    onTtsClick: (String) -> Unit
 ) {
     val listState = rememberLazyListState()
 
@@ -39,7 +41,7 @@ fun MessageList(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         items(messages, key = { it.id }) { message ->
-            MessageBubble(message = message)
+            MessageBubble(message = message, onTtsClick = onTtsClick)
         }
 
         if (isSending) {
@@ -51,11 +53,11 @@ fun MessageList(
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage) {
+private fun MessageBubble(message: ChatMessage, onTtsClick: (String) -> Unit) {
     val isUser = message.role == ChatRole.User
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         Box(
             modifier = Modifier
@@ -65,6 +67,9 @@ private fun MessageBubble(message: ChatMessage) {
                     else MaterialTheme.colorScheme.surfaceVariant
                 )
                 .padding(horizontal = 14.dp, vertical = 10.dp)
+                .clickable(!isUser) {
+                    onTtsClick(message.content)
+                }
         ) {
             Text(
                 text = message.content,

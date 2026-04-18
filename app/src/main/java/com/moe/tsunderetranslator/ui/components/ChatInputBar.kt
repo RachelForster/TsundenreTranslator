@@ -39,9 +39,9 @@ fun ChatInputBar(
                 onValueChange = onValueChange,
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Type a message") },
-                shape = RoundedCornerShape(50),
+                shape = RoundedCornerShape(10),
                 minLines = 1,
-                maxLines = 1,
+                maxLines = 4,
             )
 
             // 语音按钮

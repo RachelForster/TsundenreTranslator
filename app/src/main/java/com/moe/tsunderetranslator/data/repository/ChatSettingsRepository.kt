@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import com.moe.tsunderetranslator.domain.model.LlmSettings
 import javax.inject.Inject
 import javax.inject.Singleton
+import androidx.core.content.edit
 
 @Singleton
 class ChatSettingsRepository @Inject constructor(
@@ -18,11 +19,11 @@ class ChatSettingsRepository @Inject constructor(
     }
 
     fun saveSettings(settings: LlmSettings) {
-        sharedPreferences.edit()
-            .putString(KEY_BASE_URL, settings.baseUrl.trim())
-            .putString(KEY_MODEL, settings.model.trim())
-            .putString(KEY_API_KEY, settings.apiKey.trim())
-            .apply()
+        sharedPreferences.edit {
+            putString(KEY_BASE_URL, settings.baseUrl.trim())
+                .putString(KEY_MODEL, settings.model.trim())
+                .putString(KEY_API_KEY, settings.apiKey.trim())
+        }
     }
 
     private companion object {

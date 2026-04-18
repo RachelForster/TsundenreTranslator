@@ -15,6 +15,7 @@ import org.json.JSONObject
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
+import androidx.core.content.edit
 
 @Singleton
 class ChatRepository @Inject constructor(
@@ -111,7 +112,7 @@ class ChatRepository @Inject constructor(
                 )
             }
         }
-        sharedPreferences.edit().putString(KEY_MESSAGES, serialized.toString()).apply()
+        sharedPreferences.edit { putString(KEY_MESSAGES, serialized.toString()) }
     }
 
     private fun String.toChatRole(): ChatRole? {
