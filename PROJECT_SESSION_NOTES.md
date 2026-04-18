@@ -4,7 +4,7 @@ Last updated: 2026-04-19
 
 ## Summary
 
-This file records the key outcomes of the recent work session so future work can resume quickly without replaying the full conversation.
+This file records the current state of the Android client and the external local TTS service packaging work so future sessions can resume quickly.
 
 ## Repository
 
@@ -47,26 +47,50 @@ These files are intentionally kept local only and are ignored by Git:
 - Increased TTS HTTP timeouts to support slower inference.
 - Added WAV header inspection.
 - Added client-side compatibility fix that wraps raw PCM from the TTS server into a WAV container before playback.
+- Added duplicate-request suppression for TTS:
+  - repeated taps on the same text while that exact text is still in flight are dropped
+  - different texts are still allowed to continue queuing
 
 ### Local TTS server
 
-- Updated `D:\Software\TTS\语音服务挂载启动.py`
-- The startup script now registers the predefined character directly into `genie_tts.Server` state instead of only using `genie_tts.Internal`.
-- This fixes the previous API-side error:
-  - `Character not found or reference audio not set.`
+- The original local service lives under `D:\Software\TTS`.
+- A distribution package was assembled under `D:\Software\TTS_分发包\TTS服务包`.
+- The packaged service is self-contained and does not depend on patching `site-packages\genie_tts\Server.py`.
+- The packaged server now:
+  - discovers the packaged character directory
+  - prints service URL, available characters, and reference audio path on startup
+  - auto-selects an available port starting from `8000`
+  - exposes queue and health endpoints
+  - uses a real single-consumer request queue for `/tts`
+- The packaged startup batch file now explicitly sets:
+  - `PYTHONUTF8=1`
+  - `PYTHONIOENCODING=utf-8`
+  - `GENIE_DATA_DIR=%CD%\GenieData`
 
 ## TTS Server Findings
 
-The local TTS server is under:
+The local TTS server source is under:
 
 - `D:\Software\TTS`
 
-Observed structure:
+The distribution package is under:
+
+- `D:\Software\TTS_分发包\TTS服务包`
+
+Observed source structure:
 
 - `D:\Software\TTS\CharacterModels`
 - `D:\Software\TTS\GenieData`
 - `D:\Software\TTS\speak.py`
 - `D:\Software\TTS\语音服务挂载启动.py`
+
+Observed distribution structure:
+
+- `D:\Software\TTS_分发包\TTS服务包\runtime`
+- `D:\Software\TTS_分发包\TTS服务包\CharacterModels`
+- `D:\Software\TTS_分发包\TTS服务包\GenieData`
+- `D:\Software\TTS_分发包\TTS服务包\tts_server.py`
+- `D:\Software\TTS_分发包\TTS服务包\启动语音服务.bat`
 
 ### Known predefined character
 
@@ -123,12 +147,11 @@ Problem:
 Cause:
 
 - `genie.load_predefined_character('feibi')` populated `genie_tts.Internal`
-- `/tts` endpoint checked `genie_tts.Server`
-- These were separate runtime states
+- `/tts` endpoint checked a separate runtime state
 
 Fix:
 
-- Reworked the local startup script to register character model and reference audio into `genie_tts.Server`.
+- Reworked the local startup script to register character model and reference audio into the actual API-serving state.
 
 ### 4. Playback timeout
 
@@ -155,25 +178,39 @@ Problem:
 
 Cause:
 
-- `genie_tts` server returned raw PCM audio while advertising `audio/wav`.
+- The server returned raw PCM audio while advertising `audio/wav`.
 
 Fix:
 
 - Android client now wraps raw PCM as WAV before playback.
 
+### 6. Repeated TTS taps caused server stalls
+
+Problem:
+
+- Multiple rapid taps eventually caused no reply and low CPU usage on the server.
+
+Cause:
+
+- The first serial implementation was only a global lock, not a true queue.
+
+Fix:
+
+- The packaged TTS server now uses a real queue with a background worker.
+- The Android client drops duplicate in-flight requests for the same text.
+
 ## Current Project Risks / Hazards
 
 ### TTS server contract is fragile
 
-- The server claims `audio/wav` but may return raw PCM.
-- The Android client now works around this, but the real protocol mismatch still exists.
-- If the server output format changes again, playback may break.
+- The server still claims `audio/wav` while the actual generated payload may still behave like raw PCM in some paths.
+- The Android client works around this, but the protocol mismatch remains a long-term risk.
 
 ### Hard dependency on local LAN server
 
 - TTS depends on a PC-hosted local service.
 - The phone and PC must be on the same reachable network.
-- Any IP change requires updating `TTS Base URL`.
+- Any IP or port change requires updating `TTS Base URL`.
 
 ### Character configuration is server-coupled
 
@@ -190,6 +227,12 @@ Fix:
 - Snackbar-based debug messages are useful for troubleshooting but are not polished product behavior.
 - Once TTS is stable, some of this should likely be reduced or gated behind debug mode.
 
+### Distribution package slimming is risky
+
+- Safe removals are limited.
+- Broad pattern-based deletion inside the packaged runtime can easily remove required resources.
+- If slimming resumes later, it should be done only by explicit audited paths.
+
 ### ChatViewModel contains unsafe casts
 
 - Kotlin compile warning still exists around unchecked cast in `ChatViewModel`.
@@ -197,17 +240,17 @@ Fix:
 
 ## Suggested Next Steps
 
-- Verify end-to-end TTS playback on device after the PCM-to-WAV fix.
-- If playback works, reduce or gate the temporary debug Snackbar messages.
+- Keep verifying real-device TTS behavior with the current packaged queue-based server.
+- If TTS is stable, reduce or gate the temporary debug Snackbar messages.
 - Consider moving TTS settings into a dedicated settings model instead of reusing `LlmSettings`.
 - Clean up garbled text encoding in UI and comments.
-- Consider adding `.md` or `docs/` notes for server setup so the local TTS environment can be rebuilt easily.
+- If packaging continues later, only perform audited slimming on explicit safe paths.
 
 ## Quick Resume Checklist
 
 When resuming later, check these first:
 
-- Is the local TTS server running from `D:\Software\TTS\语音服务挂载启动.py`?
+- Is the packaged TTS service running from `D:\Software\TTS_分发包\TTS服务包\启动语音服务.bat`?
 - Is `TTS Base URL` still pointing to the correct PC IP and port?
 - Is `TTS Character Name` set to `feibi`?
 - Is `TTS Ref Audio Path` still valid on the PC?
