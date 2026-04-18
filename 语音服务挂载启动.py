@@ -67,11 +67,12 @@ from genie_tts.Utils.Language import normalize_language
 from genie_tts.Utils.Shared import context
 
 HOST = "0.0.0.0"
-PORT = 9880
+START_PORT = 8000
 
 app = FastAPI()
 reference_audios: dict[str, dict[str, str]] = {}
 tts_request_lock = threading.Lock()
+ACTIVE_PORT = START_PORT
 
 
 class CharacterPayload(BaseModel):
@@ -111,6 +112,23 @@ def get_local_urls(port: int) -> list[str]:
     except OSError:
         pass
     return urls
+
+
+def port_is_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((HOST, port))
+        except OSError:
+            return False
+    return True
+
+
+def find_available_port(start_port: int) -> int:
+    port = start_port
+    while not port_is_available(port):
+        port += 1
+    return port
 
 
 def discover_character_dirs(root: Path) -> list[tuple[str, Path]]:
@@ -172,7 +190,7 @@ def print_startup_info(registered_characters: list[dict[str, str]]) -> None:
     print("TTS 服务启动信息")
     print("=" * 72)
     print("服务 URL:")
-    for url in get_local_urls(PORT):
+    for url in get_local_urls(ACTIVE_PORT):
         print(f"- {url}")
 
     if not registered_characters:
@@ -306,6 +324,7 @@ registered = []
 for discovered_name, discovered_dir in discover_character_dirs(CHARACTER_ROOT):
     registered.append(register_character(discovered_name, discovered_dir))
 
+ACTIVE_PORT = find_available_port(START_PORT)
 print_startup_info(registered)
 
-uvicorn.run(app, host=HOST, port=PORT, workers=1)
+uvicorn.run(app, host=HOST, port=ACTIVE_PORT, workers=1)
