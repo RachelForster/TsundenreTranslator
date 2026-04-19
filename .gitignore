@@ -13,3 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+app/src/main/assets/moonshine-zh/decoder_model_merged.ort
+app/src/main/assets/moonshine-zh/encoder_model.ort

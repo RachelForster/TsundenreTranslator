@@ -87,11 +87,21 @@ class ChatViewModel @Inject constructor(
         errorFlow.value = null
     }
 
-    fun saveSettings(baseUrl: String, model: String, apiKey: String) {
+    fun saveSettings(
+        baseUrl: String,
+        model: String,
+        apiKey: String,
+        ttsBaseUrl: String,
+        ttsCharacterName: String,
+        ttsRefAudioPath: String
+    ) {
         val settings = LlmSettings(
             baseUrl = baseUrl.ifBlank { "https://api.deepseek.com" },
             model = model.ifBlank { "deepseek-chat" },
-            apiKey = apiKey
+            apiKey = apiKey,
+            ttsBaseUrl = ttsBaseUrl.ifBlank { "http://192.168.1.100:9880/" },
+            ttsCharacterName = ttsCharacterName,
+            ttsRefAudioPath = ttsRefAudioPath
         )
         chatSettingsRepository.saveSettings(settings)
         settingsFlow.value = settings
@@ -102,10 +112,10 @@ class ChatViewModel @Inject constructor(
         isRecordingFlow.value = nextRecording
         if (nextRecording) {
             asrRepository.start()
-            asrStatusFlow.value = "正在启动语音输入..."
+            asrStatusFlow.value = "濮濓絽婀崥顖氬З鐠囶參鐓舵潏鎾冲弳..."
         } else {
             asrRepository.stop()
-            asrStatusFlow.value = "语音输入已停止"
+            asrStatusFlow.value = "鐠囶參鐓舵潏鎾冲弳瀹告彃浠犲?"
         }
     }
 
@@ -117,15 +127,15 @@ class ChatViewModel @Inject constructor(
 
         when {
             text.isBlank() -> {
-                errorFlow.value = "请输入消息内容"
+                errorFlow.value = "鐠囩柉绶崗銉︾Х閹垰鍞寸€?"
                 return
             }
             settings.apiKey.isBlank() -> {
-                errorFlow.value = "请先在设置中填写 API Key"
+                errorFlow.value = "鐠囧嘲鍘涢崷銊啎缂冾喕鑵戞繅顐㈠晸 API Key"
                 return
             }
             settings.model.isBlank() -> {
-                errorFlow.value = "请先在设置中填写模型名称"
+                errorFlow.value = "鐠囧嘲鍘涢崷銊啎缂冾喕鑵戞繅顐㈠晸濡€崇€烽崥宥囆?"
                 return
             }
         }
@@ -167,14 +177,14 @@ class ChatViewModel @Inject constructor(
             } catch (e: Exception) {
                 val current = messagesFlow.value.map { message ->
                     if (message.id == assistantMessage.id && message.content.isBlank()) {
-                        message.copy(content = "请求失败：${e.message ?: "未知错误"}")
+                        message.copy(content = "鐠囬攱鐪版径杈Е閿?{e.message ?: \"閺堫亞鐓￠柨娆掝嚖\"}")
                     } else {
                         message
                     }
                 }
                 messagesFlow.value = current
                 chatRepository.saveMessages(current)
-                errorFlow.value = e.message ?: "请求失败"
+                errorFlow.value = e.message ?: "鐠囬攱鐪版径杈Е"
             } finally {
                 isSendingFlow.value = false
             }

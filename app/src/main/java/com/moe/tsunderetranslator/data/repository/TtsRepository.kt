@@ -1,15 +1,24 @@
 package com.moe.tsunderetranslator.data.repository
 
 import com.moe.tsunderetranslator.domain.provider.TtsProvider
+import javax.inject.Inject
 
-class TtsRepository(private val ttsProvider: TtsProvider) {
-
-    fun speak(text: String, options: Map<String, Any?>) {
-        ttsProvider.speak(text, options)
+class TtsRepository @Inject constructor(
+    private val ttsProvider: TtsProvider,
+    private val chatSettingsRepository: ChatSettingsRepository
+) {
+    suspend fun speak(
+        text: String,
+        options: Map<String, Any?>,
+        onEvent: ((String) -> Unit)? = null
+    ): Result<Unit> {
+        val settings = chatSettingsRepository.loadSettings()
+        return ttsProvider.speak(settings.ttsBaseUrl, text, options, onEvent)
     }
 
-    fun switchModel(modelInfo: Map<String, Any>) {
-        ttsProvider.switchModel(modelInfo)
+    suspend fun switchModel(modelInfo: Map<String, Any>): Result<Unit> {
+        val settings = chatSettingsRepository.loadSettings()
+        return ttsProvider.switchModel(settings.ttsBaseUrl, modelInfo)
     }
 
     fun stop() = ttsProvider.stop()
