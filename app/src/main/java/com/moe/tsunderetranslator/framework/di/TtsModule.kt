@@ -2,7 +2,7 @@ package com.moe.tsunderetranslator.framework.di
 
 import android.content.Context
 import com.moe.tsunderetranslator.domain.provider.TtsProvider
-import com.moe.tsunderetranslator.framework.tts.GptSoVitsRemoteImpl
+import com.moe.tsunderetranslator.framework.tts.GptSoVitsImpl
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -19,6 +19,6 @@ object TtsModule {
     fun provideTtsProvider(
         @ApplicationContext context: Context
     ): TtsProvider {
-        return GptSoVitsRemoteImpl(context)
+        return GptSoVitsImpl(context)
     }
 }

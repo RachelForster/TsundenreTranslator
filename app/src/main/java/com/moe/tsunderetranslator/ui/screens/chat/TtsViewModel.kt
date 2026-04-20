@@ -42,8 +42,8 @@ class TtsViewModel @Inject constructor(
             "text_lang" to "zh",
             "speed_factor" to 1.0,
             "ref_audio_path" to settings.ttsRefAudioPath,
-            "prompt_text" to "",
-            "prompt_lang" to ""
+            "prompt_text" to "だからって放置するわけにもいかないよね。あのゲームは今回の動機なんだからさ。",
+            "prompt_lang" to "ja"
         )
 
         viewModelScope.launch {
