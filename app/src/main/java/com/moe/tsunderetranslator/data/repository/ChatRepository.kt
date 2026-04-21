@@ -1,10 +1,17 @@
 package com.moe.tsunderetranslator.data.repository
 
 import android.content.SharedPreferences
+import androidx.core.content.edit
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.stringPreferencesKey
 import com.moe.tsunderetranslator.domain.model.ChatMessage
 import com.moe.tsunderetranslator.domain.model.ChatRole
 import com.moe.tsunderetranslator.domain.model.LlmSettings
+import javax.inject.Inject
+import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -13,14 +20,12 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
-import javax.inject.Inject
-import javax.inject.Singleton
-import androidx.core.content.edit
 
 @Singleton
 class ChatRepository @Inject constructor(
     private val okHttpClient: OkHttpClient,
-    private val sharedPreferences: SharedPreferences
+    private val sharedPreferences: SharedPreferences,
+    private val dataStore: DataStore<Preferences>
 ) {
     suspend fun streamChatCompletion(
         settings: LlmSettings,
@@ -80,8 +85,12 @@ class ChatRepository @Inject constructor(
         }
     }
 
-    fun loadMessages(): List<ChatMessage> {
-        val raw = sharedPreferences.getString(KEY_MESSAGES, null) ?: return emptyList()
+    suspend fun loadMessages(): List<ChatMessage> {
+        val raw = sharedPreferences.getString(KEY_MESSAGES, null)
+            ?: dataStore.data.first()[DATASTORE_KEY_MESSAGES]?.also { migratedValue ->
+                sharedPreferences.edit { putString(KEY_MESSAGES, migratedValue) }
+            }
+            ?: return emptyList()
         return runCatching {
             val array = JSONArray(raw)
             buildList {
@@ -121,5 +130,6 @@ class ChatRepository @Inject constructor(
 
     private companion object {
         const val KEY_MESSAGES = "chat.messages"
+        val DATASTORE_KEY_MESSAGES = stringPreferencesKey(KEY_MESSAGES)
     }
 }

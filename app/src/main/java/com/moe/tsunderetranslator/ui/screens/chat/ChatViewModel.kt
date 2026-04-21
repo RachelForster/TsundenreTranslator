@@ -35,8 +35,12 @@ class ChatViewModel @Inject constructor(
     private val asrRepository: AsrRepository
 ) : ViewModel() {
 
-    private val settingsFlow = MutableStateFlow(chatSettingsRepository.loadSettings())
-    private val messagesFlow = MutableStateFlow(chatRepository.loadMessages())
+    private val settingsFlow = chatSettingsRepository.settingsFlow.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        LlmSettings()
+    )
+    private val messagesFlow = MutableStateFlow<List<ChatMessage>>(emptyList())
     private val inputFlow = MutableStateFlow("")
     private val isSendingFlow = MutableStateFlow(false)
     private val isRecordingFlow = MutableStateFlow(false)
@@ -68,6 +72,10 @@ class ChatViewModel @Inject constructor(
     )
 
     init {
+        viewModelScope.launch {
+            messagesFlow.value = chatRepository.loadMessages()
+        }
+
         viewModelScope.launch {
             asrRepository.currentText.collect { result ->
                 asrStatusFlow.value = result.text
@@ -103,8 +111,9 @@ class ChatViewModel @Inject constructor(
             ttsCharacterName = ttsCharacterName,
             ttsRefAudioPath = ttsRefAudioPath
         )
-        chatSettingsRepository.saveSettings(settings)
-        settingsFlow.value = settings
+        viewModelScope.launch {
+            chatSettingsRepository.saveSettings(settings)
+        }
     }
 
     fun toggleAsr() {

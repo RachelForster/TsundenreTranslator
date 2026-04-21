@@ -1,111 +1,191 @@
 # Project Session Notes
 
-Last updated: 2026-04-19
+Last updated: 2026-04-22
 
-## Summary
+## Purpose
 
-This file records the current state of the Android client and the external local TTS service packaging work so future sessions can resume quickly.
+This file is for future Codex sessions. It records the current Android client state, the external local TTS service setup, the latest streaming-TTS changes, debugging workflow, and the main risks that still matter.
 
 ## Repository
 
 - Local path: `C:\Users\LaptopDreamX\AndroidStudioProjects\TsundenreTranslator`
 - Active branch: `main`
+- Current `origin`: `https://github.com/RachelForster/TsundenreTranslator.git`
+- Local helper remote may also exist: `rachelforster`
 
-## Git Identity
+## Git Notes
 
-- Local repo identity is configured for future commits.
+- Local repo identity is configured.
+- Local `main` was aligned to `RachelForster/main`.
+- Uncommitted local changes may still exist in:
+  - `PROJECT_SESSION_NOTES.md`
+  - the simplified Chinese development record markdown file in the repo root
+  - `__pycache__/`
 
-## Pushed Commits
+## Important Local-Only Files
 
-- `6893844` `Fix TTS integration and playback`
-- `8577da9` `Ignore local Moonshine model files`
-
-## Local Large Files
-
-These files are intentionally kept local only and are ignored by Git:
+These files are intentionally kept local and ignored by Git:
 
 - `app/src/main/assets/moonshine-zh/decoder_model_merged.ort`
 - `app/src/main/assets/moonshine-zh/encoder_model.ort`
 
-## Major Changes Made
+## Settings Storage
 
-### Android app
+Settings are no longer stored through direct `SharedPreferences` access in `ChatSettingsRepository`.
+
+Current state:
+
+- App settings now use `DataStore<Preferences>`
+- Existing keys are migrated automatically from the old `SharedPreferences` file `tsundere_translator_prefs`
+- `SharedPreferences` is still provided through Hilt because `ChatRepository` still uses it for chat message persistence
+- `DataStore` migration is now restricted to settings keys only; it must not be allowed to migrate `chat.messages`
+
+Important implication:
+
+- Settings persistence and chat-message persistence are now split across two storage mechanisms
+- Do not remove the `SharedPreferences` Hilt provider unless `ChatRepository` is migrated too
+- Do not switch `SharedPreferencesMigration` back to whole-file migration unless chat persistence is migrated at the same time
+
+## Current TTS Architecture
+
+The app does not synthesize TTS locally on Android. It calls a PC-hosted local LAN service.
+
+Android app:
+
+- stores TTS settings in `DataStore<Preferences>`
+- reads `TTS Base URL`, `TTS Character Name`, and `TTS Ref Audio Path`
+- sends requests to a configurable PC-hosted TTS service
+- prefers streamed PCM playback through `AudioTrack`
+- falls back to legacy file-based playback if the server does not expose the new streaming headers
+- exposes a TTS debug log panel from the top-right app bar button
+
+PC-side TTS service:
+
+- original source location: `D:\Software\TTS`
+- packaged distribution location: the packaged TTS service directory under `D:\Software\`
+- packaged service is intended to be self-contained
+- packaged service does not require patching `site-packages\genie_tts\Server.py`
+
+## Confirmed TTS Configuration
+
+- Character name: `feibi`
+- Recommended app setting `TTS Character Name`: `feibi`
+- Recommended app setting `TTS Ref Audio Path`:
+  `D:/Software/TTS/CharacterModels/v2ProPlus/feibi/prompt_wav/zh_vo_Main_Linaxita_2_1_10_26.wav`
+
+Confirmed source assets:
+
+- `D:\Software\TTS\CharacterModels\v2ProPlus\feibi`
+- `D:\Software\TTS\CharacterModels\v2ProPlus\feibi\prompt_wav.json`
+- `D:\Software\TTS\CharacterModels\v2ProPlus\feibi\prompt_wav\zh_vo_Main_Linaxita_2_1_10_26.wav`
+
+## Major Android Changes Already Made
+
+### General app / settings
 
 - Fixed `TtsViewModel` creation crash by wiring it into Hilt.
 - Added configurable TTS settings:
   - `TTS Base URL`
   - `TTS Character Name`
   - `TTS Ref Audio Path`
-- Added visible TTS error reporting via Snackbar.
-- Added click-to-copy behavior for Snackbar messages.
-- Added TTS debug status messages:
+- Migrated settings storage to `DataStore<Preferences>`.
+- Added `SharedPreferencesMigration` so old saved settings are preserved.
+- Restricted the `SharedPreferencesMigration` key set so chat history is no longer accidentally moved out of `SharedPreferences`.
+- `ChatViewModel` now observes settings from a flow-backed source instead of keeping only a synchronous copy.
+
+### TTS client behavior
+
+- Added duplicate-request suppression:
+  - repeated taps on the same in-flight text are dropped
+  - different texts are still allowed
+- Replaced the main TTS playback path with streamed PCM playback through `AudioTrack`.
+- Kept a legacy fallback path for older TTS servers that still return the old response shape.
+- Added request IDs to client-side TTS event logs.
+- Added stop/cancel handling for superseded requests.
+- Added more detailed local debug messages:
   - request sent
   - response received
-  - audio size
-  - playback start/completion
-  - playback errors
-- Increased TTS HTTP timeouts to support slower inference.
-- Added WAV header inspection.
-- Added client-side compatibility fix that wraps raw PCM from the TTS server into a WAV container before playback.
-- Added duplicate-request suppression for TTS:
-  - repeated taps on the same text while that exact text is still in flight are dropped
-  - different texts are still allowed to continue queuing
+  - `AudioTrack` initialization details
+  - first chunk timing
+  - stream progress
+  - playback completion
+  - playback drain completion/stall/timeout
+  - playback failure details
 
-### Local TTS server
+### TTS debugging UX
 
-- The original local service lives under `D:\Software\TTS`.
-- A distribution package was assembled under `D:\Software\TTS_分发包\TTS服务包`.
-- The packaged service is self-contained and does not depend on patching `site-packages\genie_tts\Server.py`.
-- The packaged server now:
-  - discovers the packaged character directory
-  - prints service URL, available characters, and reference audio path on startup
-  - auto-selects an available port starting from `8000`
-  - exposes queue and health endpoints
-  - uses a real single-consumer request queue for `/tts`
-- The packaged startup batch file now explicitly sets:
+- Snackbar messages remain active and are still clickable to copy.
+- Added a top-right TTS debug log button in the chat screen.
+- Added a `TTS Debug Logs` dialog that shows:
+  - local client TTS logs
+  - server logs fetched from the PC-hosted service
+- Added buttons to:
+  - refresh logs
+  - clear logs
+  - copy combined logs
+
+### Chat history persistence
+
+- Chat history is still persisted in `SharedPreferences` through `ChatRepository`.
+- `ChatRepository.loadMessages()` is now suspend-based.
+- If `chat.messages` was already moved into `DataStore` by the earlier over-broad migration, `ChatRepository` now attempts a one-time recovery by reading that migrated value from `DataStore` and writing it back into `SharedPreferences`.
+- `ChatViewModel` now loads chat history asynchronously at startup.
+
+## Major PC TTS Service Changes Already Made
+
+- The packaged server discovers available packaged character directories automatically.
+- It prints service URLs, available characters, and reference audio paths on startup.
+- It auto-selects an available port starting from `8000`.
+- It uses a true single-consumer request queue for `/tts`.
+- The packaged startup batch file explicitly sets:
   - `PYTHONUTF8=1`
   - `PYTHONIOENCODING=utf-8`
   - `GENIE_DATA_DIR=%CD%\GenieData`
 
-## TTS Server Findings
+### Streaming and diagnostics changes
 
-The local TTS server source is under:
+- The repo-tracked helper service script now returns streamed PCM instead of pretending to return `audio/wav`.
+- `/tts` now returns headers describing the stream:
+  - `X-TTS-Request-Id`
+  - `X-Audio-Format=pcm_s16le`
+  - sample rate
+  - channels
+  - bits per sample
+- New requests stop any older active TTS request.
+- `/stop` now supports stopping the current request or a matching request by ID.
+- Added server-side in-memory debug log retention.
+- Added:
+  - `GET /debug/logs`
+  - `POST /debug/logs/clear`
 
-- `D:\Software\TTS`
+### Current observed behavior
 
-The distribution package is under:
+- True streamed playback is now working on the Android side.
+- The main delay users notice is currently dominated by server-side synthesis latency, not by client buffering.
+- Pauses between spoken segments are likely caused by a combination of:
+  - server-side generation speed
+  - sentence splitting behavior in the TTS engine
 
-- `D:\Software\TTS_分发包\TTS服务包`
+## Repo-Tracked Helper Script
 
-Observed source structure:
+The repo root contains a tracked helper script:
 
-- `D:\Software\TTS\CharacterModels`
-- `D:\Software\TTS\GenieData`
-- `D:\Software\TTS\speak.py`
-- `D:\Software\TTS\语音服务挂载启动.py`
+- the repo-root TTS startup helper Python script
 
-Observed distribution structure:
+Purpose:
 
-- `D:\Software\TTS_分发包\TTS服务包\runtime`
-- `D:\Software\TTS_分发包\TTS服务包\CharacterModels`
-- `D:\Software\TTS_分发包\TTS服务包\GenieData`
-- `D:\Software\TTS_分发包\TTS服务包\tts_server.py`
-- `D:\Software\TTS_分发包\TTS服务包\启动语音服务.bat`
+- mainly a helper copy for distribution/testing
+- intended to be copied into a real TTS service root directory before running
+- should not be expected to run from the Android project root
 
-### Known predefined character
+Behavior currently provided:
 
-- Character name confirmed: `feibi`
-
-Character assets found at:
-
-- `D:\Software\TTS\CharacterModels\v2ProPlus\feibi`
-- `D:\Software\TTS\CharacterModels\v2ProPlus\feibi\prompt_wav.json`
-- `D:\Software\TTS\CharacterModels\v2ProPlus\feibi\prompt_wav\zh_vo_Main_Linaxita_2_1_10_26.wav`
-
-Recommended app TTS settings currently:
-
-- `TTS Character Name`: `feibi`
-- `TTS Ref Audio Path`: `D:/Software/TTS/CharacterModels/v2ProPlus/feibi/prompt_wav/zh_vo_Main_Linaxita_2_1_10_26.wav`
+- validates that `CharacterModels` and `GenieData` exist beside the script
+- prints the expected directory layout if launched from the wrong location
+- pauses before exit when the location is wrong
+- auto-selects an available port starting from `8000`
+- streams PCM audio for TTS playback
+- supports request-scoped stop and debug log inspection
 
 ## Root Cause History
 
@@ -128,11 +208,11 @@ Fix:
 Problem:
 
 - `HTTP 422`
-- Missing field `character_name`
+- missing field `character_name`
 
 Cause:
 
-- Android client request body did not match server requirements.
+- Android request body did not match server requirements.
 
 Fix:
 
@@ -146,43 +226,42 @@ Problem:
 
 Cause:
 
-- `genie.load_predefined_character('feibi')` populated `genie_tts.Internal`
-- `/tts` endpoint checked a separate runtime state
+- `genie.load_predefined_character('feibi')` populated one runtime state
+- `/tts` checked a different runtime state
 
 Fix:
 
-- Reworked the local startup script to register character model and reference audio into the actual API-serving state.
+- Reworked the local startup script so character model and reference audio are registered into the actual API-serving state.
 
 ### 4. Playback timeout
 
 Problem:
 
-- TTS request timed out on Android
+- TTS request timed out on Android.
 
 Cause:
 
-- Default HTTP timeout was too short for local inference.
+- default HTTP timeout was too short for local inference
 
 Fix:
 
 - Increased Retrofit/OkHttp timeout settings.
 
-### 5. Android playback decode error
+### 5. Old decode error with fake WAV responses
 
 Problem:
 
 - `MediaPlayer error: what=1 extra=-2147483648`
-- WAV header inspection showed invalid header:
-  - `riff='\x0b\x00\xfe\xff'`
-  - `wave='\x01\x00\x02\x00'`
+- WAV header inspection showed invalid header values
 
 Cause:
 
-- The server returned raw PCM audio while advertising `audio/wav`.
+- The server returned raw PCM while advertising `audio/wav`.
 
 Fix:
 
-- Android client now wraps raw PCM as WAV before playback.
+- Earlier client versions wrapped raw PCM as WAV before playback.
+- The current preferred path avoids that mismatch by using explicit streamed PCM playback.
 
 ### 6. Repeated TTS taps caused server stalls
 
@@ -192,70 +271,147 @@ Problem:
 
 Cause:
 
-- The first serial implementation was only a global lock, not a true queue.
+- The first serialization attempt was only a global lock, not a true queue.
 
 Fix:
 
-- The packaged TTS server now uses a real queue with a background worker.
+- The packaged TTS server now uses a true queue/serialized flow.
 - The Android client drops duplicate in-flight requests for the same text.
+- Newer streaming requests also stop superseded requests.
 
-## Current Project Risks / Hazards
+### 7. Startup script location and port robustness
 
-### TTS server contract is fragile
+Problem:
 
-- The server still claims `audio/wav` while the actual generated payload may still behave like raw PCM in some paths.
-- The Android client works around this, but the protocol mismatch remains a long-term risk.
+- Users could run the repo-root TTS startup helper script from the wrong folder.
+- A fixed port could already be occupied.
 
-### Hard dependency on local LAN server
+Fix:
 
-- TTS depends on a PC-hosted local service.
+- The helper script now checks for `CharacterModels` and `GenieData`.
+- It prints the expected layout and waits for Enter before exit if the location is wrong.
+- It scans for an available port starting from `8000`.
+
+### 8. AudioTrack streaming compatibility issues
+
+Problem:
+
+- Initial streamed playback attempts failed with `AudioTrack write failed: 0` / repeated zero-write stalls.
+
+Cause:
+
+- The first `AudioTrack` streaming path used a less compatible byte-array write path.
+
+Fix:
+
+- Switched to writing 16-bit PCM sample arrays (`short[]`) into `AudioTrack`.
+- Added `AudioTrack` initialization/state logging.
+- Added playback-drain logic so the end of playback is less likely to be cut off.
+
+### 9. Chat history disappeared after app restart
+
+Problem:
+
+- Chat messages appeared to save during runtime but were gone after app restart.
+
+Cause:
+
+- Settings were migrated from `SharedPreferences` to `DataStore` using the whole old preference file name.
+- The same file also contained `chat.messages`.
+- `ChatRepository` still read chat history from `SharedPreferences`, so after migration the app no longer found the message history where it expected it.
+
+Fix:
+
+- Restricted `SharedPreferencesMigration` to settings keys only.
+- Added a recovery fallback in `ChatRepository`:
+  - if `chat.messages` is missing in `SharedPreferences`
+  - try reading the same key from `DataStore`
+  - if found, restore it back into `SharedPreferences`
+- Updated `ChatViewModel` startup loading to handle suspend-based message loading.
+
+## Known Risks
+
+### TTS still depends on a LAN-hosted PC service
+
 - The phone and PC must be on the same reachable network.
 - Any IP or port change requires updating `TTS Base URL`.
 
 ### Character configuration is server-coupled
 
-- `TTS Character Name` must exactly match server-side predefined character names.
-- `TTS Ref Audio Path` must be a valid path on the server machine, not the phone.
+- `TTS Character Name` must exactly match a server-side character name.
+- `TTS Ref Audio Path` must be a valid path on the server machine, not on the phone.
 
-### Encoding issues remain in older source text
+### Streaming pauses are still mostly server-side
 
-- Some files still contain garbled Chinese comments/strings from prior encoding issues.
-- This does not block compilation but hurts maintainability.
+- Client-side streaming playback now works.
+- Audible pauses between phrases are likely due to sentence-based generation and synthesis speed on the PC.
+- This is not currently believed to be a client buffering issue.
+
+### Playback tail handling was recently changed and should be watched
+
+- The client now waits for playback drain before stopping `AudioTrack`.
+- This was added to reduce truncation of the final few characters.
+- It should be considered recently changed behavior and still needs real-device validation.
+
+### Settings and chat persistence are split
+
+- Settings use `DataStore<Preferences>`.
+- Chat message history still uses `SharedPreferences`.
+- Future refactors must not assume the whole app has already left `SharedPreferences`.
+- This split already caused one real migration bug where chat history appeared to vanish after restart.
+
+### Encoding issues still exist in parts of the project
+
+- Some source files still contain garbled Chinese comments or strings from earlier encoding damage.
+- This may not block compilation, but it hurts maintainability and debugging.
 
 ### Debug UX is still temporary
 
-- Snackbar-based debug messages are useful for troubleshooting but are not polished product behavior.
-- Once TTS is stable, some of this should likely be reduced or gated behind debug mode.
+- The log dialog and Snackbar debugging are useful for troubleshooting.
+- They are not polished product behavior and may need to be reduced or gated later.
 
 ### Distribution package slimming is risky
 
 - Safe removals are limited.
-- Broad pattern-based deletion inside the packaged runtime can easily remove required resources.
-- If slimming resumes later, it should be done only by explicit audited paths.
+- Broad deletion inside the packaged runtime can easily remove required resources.
+- Any future slimming should use explicitly audited paths only.
 
-### ChatViewModel contains unsafe casts
+### Repo-root helper script is intentionally not runnable here
 
-- Kotlin compile warning still exists around unchecked cast in `ChatViewModel`.
+- The tracked repo-root TTS startup helper script is just a helper copy.
+- It should refuse to run from the Android project root because that location does not contain `CharacterModels` and `GenieData`.
+
+### ChatViewModel still has unsafe-cast cleanup debt
+
+- A Kotlin compile warning still exists around an unchecked cast in `ChatViewModel`.
 - Not an immediate blocker, but worth cleaning up later.
 
 ## Suggested Next Steps
 
-- Keep verifying real-device TTS behavior with the current packaged queue-based server.
-- If TTS is stable, reduce or gate the temporary debug Snackbar messages.
+- Keep validating real-device TTS playback with the current streaming PCM path.
+- Specifically re-check whether the final few characters still get cut off after the playback-drain fix.
+- If phrase pauses remain unacceptable, investigate server-side sentence splitting and synthesis cadence before changing the client again.
+- Consider adding a settings toggle for `split_sentence` if A/B testing is needed.
 - Consider moving TTS settings into a dedicated settings model instead of reusing `LlmSettings`.
 - Clean up garbled text encoding in UI and comments.
-- If packaging continues later, only perform audited slimming on explicit safe paths.
+- If packaging work continues, only do audited slimming on explicit safe paths.
 
 ## Quick Resume Checklist
 
 When resuming later, check these first:
 
-- Is the packaged TTS service running from `D:\Software\TTS_分发包\TTS服务包\启动语音服务.bat`?
+- Is the packaged TTS service running from its startup batch file inside the packaged TTS service directory under `D:\Software\`?
+- If using the tracked repo-root TTS startup helper script, has it been copied into a real TTS root folder before launch?
 - Is `TTS Base URL` still pointing to the correct PC IP and port?
-- Is `TTS Character Name` set to `feibi`?
+- Is `TTS Character Name` still `feibi`?
 - Is `TTS Ref Audio Path` still valid on the PC?
-- Does tapping an assistant message show:
-  - `TTS request sent`
-  - `TTS response received`
-  - `Audio received: ...`
-  - `Playback started`
+- Does the app bar top-right TTS debug button open and refresh logs successfully?
+- Does tapping an assistant message show logs like:
+  - `TTS[...] Request sent`
+  - `TTS[...] Response received: format=pcm_s16le ...`
+  - `TTS[...] AudioTrack ready: ...`
+  - `TTS[...] Playback started: ...`
+  - `TTS[...] Playback completed: ...`
+- If the final syllables still get cut off, capture both:
+  - local log dialog output
+  - matching server log lines with the same request ID

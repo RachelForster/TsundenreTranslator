@@ -26,6 +26,7 @@ import androidx.compose.ui.text.AnnotatedString
 import com.moe.tsunderetranslator.ui.components.ChatInputBar
 import com.moe.tsunderetranslator.ui.components.MessageList
 import com.moe.tsunderetranslator.ui.components.SettingsDialog
+import com.moe.tsunderetranslator.ui.components.TtsDebugDialog
 import kotlinx.coroutines.flow.collectLatest
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -33,9 +34,11 @@ import kotlinx.coroutines.flow.collectLatest
 fun ChatScreen(viewModel: ChatViewModel, asrViewModel: AsrViewModel, ttsViewModel: TtsViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val asrText by asrViewModel.uiText.collectAsState()
+    val ttsDebugState by ttsViewModel.debugState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboardManager = LocalClipboardManager.current
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showTtsDebug by rememberSaveable { mutableStateOf(false) }
     var isRecording by remember { mutableStateOf(false) }
 
     suspend fun showMessage(message: String) {
@@ -68,6 +71,19 @@ fun ChatScreen(viewModel: ChatViewModel, asrViewModel: AsrViewModel, ttsViewMode
                 navigationIcon = {
                     IconButton(onClick = { showSettings = true }) {
                         Icon(painterResource(android.R.drawable.ic_menu_manage), "Settings")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            showTtsDebug = true
+                            ttsViewModel.refreshDebugLogs()
+                        }
+                    ) {
+                        Icon(
+                            painterResource(android.R.drawable.ic_menu_info_details),
+                            "TTS Debug Logs"
+                        )
                     }
                 }
             )
@@ -129,6 +145,18 @@ fun ChatScreen(viewModel: ChatViewModel, asrViewModel: AsrViewModel, ttsViewMode
             onSave = { b, m, a, t, c, r ->
                 viewModel.saveSettings(b, m, a, t, c, r)
                 showSettings = false
+            }
+        )
+    }
+
+    if (showTtsDebug) {
+        TtsDebugDialog(
+            state = ttsDebugState,
+            onDismiss = { showTtsDebug = false },
+            onRefresh = ttsViewModel::refreshDebugLogs,
+            onClear = ttsViewModel::clearDebugLogs,
+            onCopyAll = { text ->
+                clipboardManager.setText(AnnotatedString(text))
             }
         )
     }

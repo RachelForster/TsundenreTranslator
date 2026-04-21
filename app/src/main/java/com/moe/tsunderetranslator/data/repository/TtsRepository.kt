@@ -21,5 +21,15 @@ class TtsRepository @Inject constructor(
         return ttsProvider.switchModel(settings.ttsBaseUrl, modelInfo)
     }
 
+    suspend fun fetchDebugLogs(limit: Int = 200): Result<List<String>> {
+        val settings = chatSettingsRepository.loadSettings()
+        return ttsProvider.fetchDebugLogs(settings.ttsBaseUrl, limit)
+    }
+
+    suspend fun clearDebugLogs(): Result<Unit> {
+        val settings = chatSettingsRepository.loadSettings()
+        return ttsProvider.clearDebugLogs(settings.ttsBaseUrl)
+    }
+
     fun stop() = ttsProvider.stop()
 }

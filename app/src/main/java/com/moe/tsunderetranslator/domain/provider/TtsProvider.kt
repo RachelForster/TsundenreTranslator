@@ -10,6 +10,10 @@ interface TtsProvider {
 
     suspend fun switchModel(baseUrl: String, modelInfo: Map<String, Any>): Result<Unit>
 
+    suspend fun fetchDebugLogs(baseUrl: String, limit: Int = 200): Result<List<String>>
+
+    suspend fun clearDebugLogs(baseUrl: String): Result<Unit>
+
     fun stop()
     fun release()
 }

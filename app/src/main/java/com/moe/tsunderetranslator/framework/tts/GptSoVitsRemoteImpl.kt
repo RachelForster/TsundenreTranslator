@@ -1,29 +1,55 @@
 package com.moe.tsunderetranslator.framework.tts
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
 import android.media.MediaPlayer
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.moe.tsunderetranslator.data.remote.GptSoVitsApi
 import com.moe.tsunderetranslator.domain.provider.TtsProvider
 import java.io.File
-import java.io.FileOutputStream
+import java.io.IOException
 import java.io.InputStream
-import java.io.RandomAccessFile
+import java.lang.Thread.sleep
+import java.util.UUID
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import org.json.JSONArray
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-import java.util.concurrent.TimeUnit
 
 class GptSoVitsRemoteImpl(
     private val context: Context
 ) : TtsProvider {
 
-    private var mediaPlayer: MediaPlayer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val stateLock = Any()
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .writeTimeout(180, TimeUnit.SECONDS)
+        .callTimeout(180, TimeUnit.SECONDS)
+        .build()
+
+    private var mediaPlayer: MediaPlayer? = null
+    private var audioTrack: AudioTrack? = null
+    private var activeCall: Call? = null
+    private var activeRequestId: String? = null
+    private var activeBaseUrl: String? = null
+    private var activeStopReason: String? = null
 
     override suspend fun speak(
         baseUrl: String,
@@ -31,37 +57,103 @@ class GptSoVitsRemoteImpl(
         options: Map<String, Any?>,
         onEvent: ((String) -> Unit)?
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        var requestIdForCleanup: String? = null
         runCatching {
             require(text.isNotBlank()) { "TTS text is empty" }
-            require(baseUrl.isNotBlank()) { "TTS Base URL is empty" }
+            val normalizedBaseUrl = normalizeBaseUrl(baseUrl)
+            require(normalizedBaseUrl.isNotBlank()) { "TTS Base URL is empty" }
 
-            val params = mutableMapOf<String, Any>(
-                "character_name" to (options["character_name"] ?: ""),
-                "text" to text,
-                "text_lang" to (options["text_lang"] ?: "ja"),
-                "ref_audio_path" to (options["ref_audio_path"] ?: ""),
-                "prompt_text" to (options["prompt_text"] ?: ""),
-                "prompt_lang" to (options["prompt_lang"] ?: ""),
-                "text_split_method" to "cut5",
-                "batch_size" to 1,
-                "speed_factor" to (options["speed_factor"] ?: 1.0)
-            )
+            val requestId = UUID.randomUUID().toString().take(8)
+            requestIdForCleanup = requestId
+            stopInternal(reason = "superseded_by_new_request", notify = null)
 
-            val response = createApi(baseUrl).generateTts(params)
-            if (!response.isSuccessful) {
-                val errorBody = response.errorBody()?.string().orEmpty()
-                error(
-                    "TTS request failed: HTTP ${response.code()} ${
-                        errorBody.ifBlank { response.message() }
-                    }"
-                )
+            val payload = JSONObject().apply {
+                put("request_id", requestId)
+                put("character_name", options["character_name"] ?: "")
+                put("text", text)
+                put("text_lang", options["text_lang"] ?: "ja")
+                put("ref_audio_path", options["ref_audio_path"] ?: "")
+                put("prompt_text", options["prompt_text"] ?: "")
+                put("prompt_lang", options["prompt_lang"] ?: "")
+                put("text_split_method", "cut5")
+                put("batch_size", 1)
+                put("speed_factor", options["speed_factor"] ?: 1.0)
+                put("split_sentence", true)
             }
 
-            val body = response.body() ?: error("TTS response body is empty")
-            onEvent?.invoke("TTS response received")
-            saveAndPlay(body.byteStream(), onEvent)
+            emitEvent(onEvent, requestId, "Request sent: chars=${text.length}")
+
+            val request = Request.Builder()
+                .url(normalizedBaseUrl.toHttpUrl().newBuilder().addPathSegment("tts").build())
+                .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+
+            val call = httpClient.newCall(request)
+            synchronized(stateLock) {
+                activeCall = call
+                activeRequestId = requestId
+                activeBaseUrl = normalizedBaseUrl
+                activeStopReason = null
+            }
+
+            call.execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string().orEmpty()
+                    error(
+                        "TTS request failed: HTTP ${response.code} ${
+                            errorBody.ifBlank { response.message }
+                        }"
+                    )
+                }
+
+                val resolvedRequestId = response.header("X-TTS-Request-Id") ?: requestId
+                val format = response.header("X-Audio-Format")?.lowercase().orEmpty()
+                val sampleRate = response.header("X-Audio-Sample-Rate")?.toIntOrNull() ?: 32000
+                val channels = response.header("X-Audio-Channels")?.toIntOrNull() ?: 1
+                val bitsPerSample = response.header("X-Audio-Bits-Per-Sample")?.toIntOrNull() ?: 16
+                val body = response.body ?: error("TTS response body is empty")
+
+                emitEvent(
+                    onEvent,
+                    resolvedRequestId,
+                    "Response received: format=${format.ifBlank { "legacy" }} rate=$sampleRate channels=$channels bits=$bitsPerSample"
+                )
+
+                if (format == "pcm_s16le") {
+                    streamPcmToAudioTrack(
+                        requestId = resolvedRequestId,
+                        inputStream = body.byteStream(),
+                        sampleRate = sampleRate,
+                        channels = channels,
+                        bitsPerSample = bitsPerSample,
+                        onEvent = onEvent
+                    )
+                } else {
+                    emitEvent(onEvent, resolvedRequestId, "Legacy response detected; falling back to file playback")
+                    saveAndPlayLegacy(body.byteStream(), resolvedRequestId, onEvent)
+                }
+            }
         }.onFailure { e ->
-            Log.e("GptSoVits", "TTS failed: ${e.message}", e)
+            when {
+                isExpectedStop(e) -> {
+                    val requestId = synchronized(stateLock) { activeRequestId } ?: "unknown"
+                    emitEvent(onEvent, requestId, "Playback stopped: ${e.message ?: "cancelled"}")
+                    Log.i(TAG, "TTS stopped: ${e.message}")
+                }
+                else -> {
+                    Log.e(TAG, "TTS failed: ${e.message}", e)
+                    onEvent?.invoke("TTS failed: ${e.message ?: "unknown error"}")
+                }
+            }
+        }.also {
+            synchronized(stateLock) {
+                if (requestIdForCleanup != null && activeRequestId == requestIdForCleanup) {
+                    activeCall = null
+                    activeRequestId = null
+                    activeBaseUrl = null
+                    activeStopReason = null
+                }
+            }
         }
     }
 
@@ -87,11 +179,188 @@ class GptSoVitsRemoteImpl(
                     }
                 }
             }.onFailure { e ->
-                Log.e("GptSoVits", "Switch model failed: ${e.message}", e)
+                Log.e(TAG, "Switch model failed: ${e.message}", e)
             }
         }
 
-    private fun saveAndPlay(inputStream: InputStream, onEvent: ((String) -> Unit)?) {
+    override suspend fun fetchDebugLogs(baseUrl: String, limit: Int): Result<List<String>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val url = normalizeBaseUrl(baseUrl).toHttpUrl().newBuilder()
+                    .addPathSegments("debug/logs")
+                    .addQueryParameter("limit", limit.toString())
+                    .build()
+                httpClient.newCall(Request.Builder().url(url).get().build()).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        error("Fetch debug logs failed: HTTP ${response.code} ${response.message}")
+                    }
+                    val body = response.body?.string().orEmpty()
+                    val json = JSONObject(body)
+                    val logs = json.optJSONArray("logs") ?: JSONArray()
+                    buildList {
+                        for (index in 0 until logs.length()) {
+                            add(logs.optString(index))
+                        }
+                    }
+                }
+            }
+        }
+
+    override suspend fun clearDebugLogs(baseUrl: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val url = normalizeBaseUrl(baseUrl).toHttpUrl().newBuilder()
+                    .addPathSegments("debug/logs/clear")
+                    .build()
+                httpClient.newCall(
+                    Request.Builder()
+                        .url(url)
+                        .post(ByteArray(0).toRequestBody())
+                        .build()
+                ).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        error("Clear debug logs failed: HTTP ${response.code} ${response.message}")
+                    }
+                }
+            }
+        }
+
+    override fun stop() {
+        stopInternal(reason = "client_stop", notify = null)
+    }
+
+    override fun release() {
+        stop()
+    }
+
+    private fun streamPcmToAudioTrack(
+        requestId: String,
+        inputStream: InputStream,
+        sampleRate: Int,
+        channels: Int,
+        bitsPerSample: Int,
+        onEvent: ((String) -> Unit)?
+    ) {
+        require(bitsPerSample == 16) { "Unsupported PCM bits per sample: $bitsPerSample" }
+        require(channels == 1 || channels == 2) { "Unsupported PCM channels: $channels" }
+
+        val channelConfig = if (channels == 1) {
+            AudioFormat.CHANNEL_OUT_MONO
+        } else {
+            AudioFormat.CHANNEL_OUT_STEREO
+        }
+        val minBufferSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            channelConfig,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
+        require(minBufferSize > 0) {
+            "AudioTrack minBufferSize failed: $minBufferSize"
+        }
+
+        val bufferSize = maxOf(minBufferSize * 4, sampleRate * channels)
+        val track = createAudioTrack(sampleRate, channelConfig, bufferSize)
+        require(track.state == AudioTrack.STATE_INITIALIZED) {
+            "AudioTrack init failed: state=${track.state} sampleRate=$sampleRate channels=$channels bufferSize=$bufferSize"
+        }
+        val startedAt = System.nanoTime()
+        var totalBytes = 0L
+        var chunkCount = 0
+        var firstChunkAtMs: Long? = null
+        var playbackStarted = false
+        val buffer = ByteArray(4096)
+        val frameSizeBytes = channels * (bitsPerSample / 8)
+        var pendingByte: Int? = null
+        var totalSamplesWritten = 0L
+
+        synchronized(stateLock) {
+            audioTrack = track
+        }
+
+        try {
+            emitEvent(
+                onEvent,
+                requestId,
+                "AudioTrack ready: sampleRate=$sampleRate channels=$channels bits=$bitsPerSample minBuffer=$minBufferSize bufferSize=$bufferSize state=${track.state}"
+            )
+            inputStream.use { stream ->
+                while (true) {
+                    throwIfStopped(requestId)
+                    val read = stream.read(buffer)
+                    if (read == -1) {
+                        break
+                    }
+                    if (read == 0) {
+                        continue
+                    }
+
+                    if (!playbackStarted) {
+                        track.play()
+                        playbackStarted = true
+                        firstChunkAtMs = elapsedMs(startedAt)
+                        emitEvent(
+                            onEvent,
+                            requestId,
+                            "Playback started: first_chunk_ms=$firstChunkAtMs buffer_size=$bufferSize"
+                        )
+                    }
+
+                    val normalizedChunk = normalizePcmChunk(
+                        source = buffer,
+                        count = read,
+                        frameSizeBytes = frameSizeBytes,
+                        pendingByte = pendingByte
+                    )
+                    pendingByte = normalizedChunk.pendingByte
+                    if (normalizedChunk.sampleCount > 0) {
+                        writeFully(track, normalizedChunk.samples, normalizedChunk.sampleCount)
+                        totalSamplesWritten += normalizedChunk.sampleCount.toLong()
+                    }
+                    totalBytes += read.toLong()
+                    chunkCount += 1
+
+                    if (chunkCount == 1 || chunkCount % 50 == 0) {
+                        emitEvent(
+                            onEvent,
+                            requestId,
+                            "Stream progress: chunks=$chunkCount bytes=$totalBytes elapsed_ms=${elapsedMs(startedAt)}"
+                        )
+                    }
+                }
+            }
+
+            pendingByte?.let {
+                emitEvent(onEvent, requestId, "Stream ended with 1 dangling byte; dropping trailing partial sample")
+            }
+            if (playbackStarted) {
+                awaitPlaybackDrain(
+                    track = track,
+                    totalSamplesWritten = totalSamplesWritten,
+                    sampleRate = sampleRate,
+                    requestId = requestId,
+                    onEvent = onEvent
+                )
+            }
+            emitEvent(
+                onEvent,
+                requestId,
+                "Playback completed: chunks=$chunkCount bytes=$totalBytes samples=$totalSamplesWritten total_ms=${elapsedMs(startedAt)}"
+            )
+        } finally {
+            synchronized(stateLock) {
+                if (audioTrack === track) {
+                    audioTrack = null
+                }
+            }
+            track.releaseSafely()
+        }
+    }
+
+    private fun saveAndPlayLegacy(
+        inputStream: InputStream,
+        requestId: String,
+        onEvent: ((String) -> Unit)?
+    ) {
         try {
             val tempFile = File(context.cacheDir, "gpt_sovits_temp.wav")
             tempFile.outputStream().use { output ->
@@ -99,184 +368,329 @@ class GptSoVitsRemoteImpl(
             }
 
             val fileSizeBytes = tempFile.length()
-            onEvent?.invoke("Audio received: ${fileSizeBytes / 1024} KB")
+            emitEvent(onEvent, requestId, "Legacy audio buffered: ${fileSizeBytes / 1024} KB")
             if (fileSizeBytes <= 0L) {
                 error("Generated audio file is empty")
             }
 
-            val wavHeaderInfo = inspectWavHeader(tempFile)
-            onEvent?.invoke(wavHeaderInfo.summary)
-            if (!wavHeaderInfo.isValidWav) {
-                onEvent?.invoke("Raw PCM detected, wrapping as WAV")
-                wrapPcmAsWav(tempFile, sampleRate = 32000, channels = 1, bitsPerSample = 16)
-            }
-
             mainHandler.post {
                 try {
-                    stop()
+                    stopLocalPlaybackOnly()
                     mediaPlayer = MediaPlayer().apply {
                         setOnPreparedListener {
-                            onEvent?.invoke("Playback started")
+                            emitEvent(onEvent, requestId, "Legacy playback started")
                             start()
                         }
                         setOnCompletionListener {
-                            onEvent?.invoke("Playback completed")
-                            Log.d("GptSoVits", "Playback completed")
+                            emitEvent(onEvent, requestId, "Legacy playback completed")
+                            Log.d(TAG, "Legacy playback completed")
                         }
                         setOnErrorListener { _, what, extra ->
-                            onEvent?.invoke("MediaPlayer error: what=$what extra=$extra")
+                            emitEvent(onEvent, requestId, "Legacy MediaPlayer error: what=$what extra=$extra")
                             true
                         }
                         setDataSource(tempFile.absolutePath)
                         prepareAsync()
                     }
                 } catch (e: Exception) {
-                    Log.e("GptSoVits", "Playback failed: ${e.message}", e)
-                    onEvent?.invoke("Playback failed: ${e.message ?: "unknown error"}")
+                    Log.e(TAG, "Legacy playback failed: ${e.message}", e)
+                    emitEvent(onEvent, requestId, "Legacy playback failed: ${e.message ?: "unknown error"}")
                 }
             }
         } catch (e: Exception) {
-            Log.e("GptSoVits", "Playback failed: ${e.message}", e)
+            Log.e(TAG, "Legacy playback failed: ${e.message}", e)
             throw e
         }
     }
 
-    override fun stop() {
+    private fun stopInternal(reason: String, notify: ((String) -> Unit)?) {
+        val requestId: String?
+        val baseUrl: String?
+        val call: Call?
+        val track: AudioTrack?
+        synchronized(stateLock) {
+            requestId = activeRequestId
+            baseUrl = activeBaseUrl
+            call = activeCall
+            track = audioTrack
+            activeStopReason = reason
+            activeCall = null
+            audioTrack = null
+            activeRequestId = null
+            activeBaseUrl = null
+        }
+
+        if (requestId != null) {
+            notify?.invoke("TTS[$requestId] Stop requested: $reason")
+        }
+        call?.cancel()
+        track?.stopSafely()
+        track?.releaseSafely()
+        stopLocalPlaybackOnly()
+
+        if (requestId != null && baseUrl != null) {
+            sendStopRequest(baseUrl, requestId, reason)
+        }
+    }
+
+    private fun stopLocalPlaybackOnly() {
         mediaPlayer?.let {
-            if (it.isPlaying) it.stop()
+            try {
+                if (it.isPlaying) it.stop()
+            } catch (_: IllegalStateException) {
+            }
             it.release()
         }
         mediaPlayer = null
     }
 
-    override fun release() {
-        stop()
+    private fun sendStopRequest(baseUrl: String, requestId: String, reason: String) {
+        val stopUrl = try {
+            normalizeBaseUrl(baseUrl).toHttpUrl().newBuilder()
+                .addPathSegment("stop")
+                .addQueryParameter("request_id", requestId)
+                .addQueryParameter("reason", reason)
+                .build()
+        } catch (e: Exception) {
+            Log.w(TAG, "Stop request URL build failed: ${e.message}")
+            return
+        }
+
+        Thread {
+            runCatching {
+                httpClient.newCall(Request.Builder().url(stopUrl).post(ByteArray(0).toRequestBody()).build())
+                    .execute()
+                    .use { response ->
+                        Log.d(TAG, "Stop request completed for $requestId with HTTP ${response.code}")
+                    }
+            }.onFailure { e ->
+                Log.w(TAG, "Stop request failed for $requestId: ${e.message}")
+            }
+        }.start()
     }
 
-    private fun inspectWavHeader(file: File): WavHeaderInfo {
-        RandomAccessFile(file, "r").use { raf ->
-            if (raf.length() < 12) {
-                return WavHeaderInfo(
-                    isValidWav = false,
-                    summary = "Audio header invalid: file too small (${raf.length()} bytes)"
+    private fun throwIfStopped(requestId: String) {
+        synchronized(stateLock) {
+            if (activeRequestId != requestId) {
+                val reason = activeStopReason ?: "request_replaced"
+                throw IOException("stream stopped: $reason")
+            }
+        }
+    }
+
+    private fun isExpectedStop(error: Throwable): Boolean {
+        val message = error.message.orEmpty()
+        return error is IOException && (
+            message.startsWith("stream stopped:") ||
+                message.contains("canceled", ignoreCase = true)
+            )
+    }
+
+    private fun writeFully(track: AudioTrack, samples: ShortArray, count: Int) {
+        var offset = 0
+        var zeroWriteCount = 0
+        while (offset < count) {
+            val remaining = count - offset
+            val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                track.write(samples, offset, remaining, AudioTrack.WRITE_BLOCKING)
+            } else {
+                @Suppress("DEPRECATION")
+                track.write(samples, offset, remaining)
+            }
+            if (written < 0) {
+                error("AudioTrack write failed: $written state=${track.state} playState=${track.playState}")
+            }
+            if (written == 0) {
+                zeroWriteCount += 1
+                if (zeroWriteCount >= 5) {
+                    error(
+                        "AudioTrack write stalled: 0 repeated $zeroWriteCount times state=${track.state} playState=${track.playState}"
+                    )
+                }
+                Thread.sleep(10)
+                continue
+            }
+            zeroWriteCount = 0
+            offset += written
+        }
+    }
+
+    private fun normalizePcmChunk(
+        source: ByteArray,
+        count: Int,
+        frameSizeBytes: Int,
+        pendingByte: Int?
+    ): NormalizedPcmChunk {
+        require(frameSizeBytes >= 2) { "Unsupported frame size: $frameSizeBytes" }
+
+        val combined = ByteArray(count + if (pendingByte != null) 1 else 0)
+        var combinedLength = 0
+        if (pendingByte != null) {
+            combined[combinedLength++] = pendingByte.toByte()
+        }
+        System.arraycopy(source, 0, combined, combinedLength, count)
+        combinedLength += count
+
+        val usableBytes = combinedLength - (combinedLength % 2)
+        val nextPendingByte = if (usableBytes < combinedLength) {
+            combined[combinedLength - 1].toInt() and 0xFF
+        } else {
+            null
+        }
+
+        val sampleCount = usableBytes / 2
+        val samples = ShortArray(sampleCount)
+        var sampleIndex = 0
+        var byteIndex = 0
+        while (byteIndex + 1 < usableBytes) {
+            val low = combined[byteIndex].toInt() and 0xFF
+            val high = combined[byteIndex + 1].toInt()
+            samples[sampleIndex++] = ((high shl 8) or low).toShort()
+            byteIndex += 2
+        }
+
+        return NormalizedPcmChunk(
+            samples = samples,
+            sampleCount = sampleCount,
+            pendingByte = nextPendingByte
+        )
+    }
+
+    private fun awaitPlaybackDrain(
+        track: AudioTrack,
+        totalSamplesWritten: Long,
+        sampleRate: Int,
+        requestId: String,
+        onEvent: ((String) -> Unit)?
+    ) {
+        if (totalSamplesWritten <= 0L) {
+            track.stopSafely()
+            return
+        }
+
+        val waitStartedAt = System.nanoTime()
+        val timeoutMs = maxOf(
+            1500L,
+            TimeUnit.SECONDS.toMillis((totalSamplesWritten / sampleRate.toLong()) + 2L)
+        )
+        var lastReportedPosition = -1L
+        var stalledPollCount = 0
+
+        while (elapsedMs(waitStartedAt) < timeoutMs) {
+            val playbackHead = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+            if (playbackHead >= totalSamplesWritten) {
+                emitEvent(
+                    onEvent,
+                    requestId,
+                    "Playback drain complete: playbackHead=$playbackHead target=$totalSamplesWritten wait_ms=${elapsedMs(waitStartedAt)}"
                 )
+                track.stopSafely()
+                return
             }
 
-            val riff = ByteArray(4)
-            val wave = ByteArray(4)
-            raf.readFully(riff)
-            raf.seek(8)
-            raf.readFully(wave)
+            if (playbackHead == lastReportedPosition) {
+                stalledPollCount += 1
+            } else {
+                stalledPollCount = 0
+                lastReportedPosition = playbackHead
+            }
 
-            val riffText = riff.toAsciiText()
-            val waveText = wave.toAsciiText()
-            val isValid = riffText == "RIFF" && waveText == "WAVE"
+            if (stalledPollCount > 20) {
+                emitEvent(
+                    onEvent,
+                    requestId,
+                    "Playback drain stalled: playbackHead=$playbackHead target=$totalSamplesWritten wait_ms=${elapsedMs(waitStartedAt)}"
+                )
+                break
+            }
 
-            return WavHeaderInfo(
-                isValidWav = isValid,
-                summary = if (isValid) {
-                    "WAV header OK: RIFF/WAVE"
-                } else {
-                    "Audio header invalid: riff='$riffText' wave='$waveText'"
-                }
+            sleep(25)
+        }
+
+        emitEvent(
+            onEvent,
+            requestId,
+            "Playback drain timeout: playbackHead=${track.playbackHeadPosition.toLong() and 0xFFFFFFFFL} target=$totalSamplesWritten timeout_ms=$timeoutMs"
+        )
+        track.stopSafely()
+    }
+
+    private fun createAudioTrack(sampleRate: Int, channelConfig: Int, bufferSize: Int): AudioTrack {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(channelConfig)
+                        .build()
+                )
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(bufferSize)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                sampleRate,
+                channelConfig,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize,
+                AudioTrack.MODE_STREAM
             )
         }
     }
 
-    private fun ByteArray.toAsciiText(): String {
-        return joinToString(separator = "") { byte ->
-            val value = byte.toInt() and 0xFF
-            if (value in 32..126) value.toChar().toString() else "\\x" + value.toString(16).padStart(2, '0')
+    private fun elapsedMs(startedAt: Long): Long =
+        TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt)
+
+    private fun emitEvent(onEvent: ((String) -> Unit)?, requestId: String, message: String) {
+        onEvent?.invoke("TTS[$requestId] $message")
+    }
+
+    private fun normalizeBaseUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trim()
+        return when {
+            trimmed.isBlank() -> trimmed
+            trimmed.endsWith("/") -> trimmed
+            else -> "$trimmed/"
         }
     }
 
-    private fun wrapPcmAsWav(file: File, sampleRate: Int, channels: Int, bitsPerSample: Int) {
-        val pcmData = file.readBytes()
-        val wavHeader = createWavHeader(
-            audioDataLength = pcmData.size.toLong(),
-            sampleRate = sampleRate,
-            channels = channels,
-            bitsPerSample = bitsPerSample
-        )
-
-        FileOutputStream(file, false).use { output ->
-            output.write(wavHeader)
-            output.write(pcmData)
+    private fun AudioTrack.stopSafely() {
+        runCatching {
+            if (playState == AudioTrack.PLAYSTATE_PLAYING) {
+                stop()
+            }
         }
     }
 
-    private fun createWavHeader(
-        audioDataLength: Long,
-        sampleRate: Int,
-        channels: Int,
-        bitsPerSample: Int
-    ): ByteArray {
-        val byteRate = sampleRate * channels * bitsPerSample / 8
-        val blockAlign = channels * bitsPerSample / 8
-        val chunkSize = 36 + audioDataLength
-
-        return ByteArray(44).apply {
-            writeAscii(0, "RIFF")
-            writeLittleEndianInt(4, chunkSize.toInt())
-            writeAscii(8, "WAVE")
-            writeAscii(12, "fmt ")
-            writeLittleEndianInt(16, 16)
-            writeLittleEndianShort(20, 1)
-            writeLittleEndianShort(22, channels.toShort())
-            writeLittleEndianInt(24, sampleRate)
-            writeLittleEndianInt(28, byteRate)
-            writeLittleEndianShort(32, blockAlign.toShort())
-            writeLittleEndianShort(34, bitsPerSample.toShort())
-            writeAscii(36, "data")
-            writeLittleEndianInt(40, audioDataLength.toInt())
-        }
+    private fun AudioTrack.releaseSafely() {
+        runCatching { release() }
     }
-
-    private fun ByteArray.writeAscii(offset: Int, value: String) {
-        value.forEachIndexed { index, char ->
-            this[offset + index] = char.code.toByte()
-        }
-    }
-
-    private fun ByteArray.writeLittleEndianInt(offset: Int, value: Int) {
-        this[offset] = (value and 0xFF).toByte()
-        this[offset + 1] = ((value shr 8) and 0xFF).toByte()
-        this[offset + 2] = ((value shr 16) and 0xFF).toByte()
-        this[offset + 3] = ((value shr 24) and 0xFF).toByte()
-    }
-
-    private fun ByteArray.writeLittleEndianShort(offset: Int, value: Short) {
-        val intValue = value.toInt()
-        this[offset] = (intValue and 0xFF).toByte()
-        this[offset + 1] = ((intValue shr 8) and 0xFF).toByte()
-    }
-
-    private data class WavHeaderInfo(
-        val isValidWav: Boolean,
-        val summary: String
-    )
 
     private fun createApi(baseUrl: String): GptSoVitsApi {
-        val normalizedBaseUrl = baseUrl.trim().let { value ->
-            when {
-                value.isBlank() -> value
-                value.endsWith("/") -> value
-                else -> "$value/"
-            }
-        }
-
         return Retrofit.Builder()
-            .baseUrl(normalizedBaseUrl)
-            .client(
-                OkHttpClient.Builder()
-                    .connectTimeout(15, TimeUnit.SECONDS)
-                    .readTimeout(180, TimeUnit.SECONDS)
-                    .writeTimeout(180, TimeUnit.SECONDS)
-                    .callTimeout(180, TimeUnit.SECONDS)
-                    .build()
-            )
+            .baseUrl(normalizeBaseUrl(baseUrl))
+            .client(httpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(GptSoVitsApi::class.java)
     }
+
+    private companion object {
+        const val TAG = "GptSoVits"
+    }
+
+    private data class NormalizedPcmChunk(
+        val samples: ShortArray,
+        val sampleCount: Int,
+        val pendingByte: Int?
+    )
 }
