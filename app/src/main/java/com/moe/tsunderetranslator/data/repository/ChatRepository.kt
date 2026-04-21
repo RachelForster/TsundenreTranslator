@@ -24,6 +24,8 @@ import java.io.IOException
 @Singleton
 class ChatRepository @Inject constructor(
     private val okHttpClient: OkHttpClient,
+    // Chat history still lives in SharedPreferences for now. Do not remove this
+    // dependency until chat persistence itself is migrated.
     private val sharedPreferences: SharedPreferences,
     private val dataStore: DataStore<Preferences>
 ) {
@@ -88,6 +90,8 @@ class ChatRepository @Inject constructor(
     suspend fun loadMessages(): List<ChatMessage> {
         val raw = sharedPreferences.getString(KEY_MESSAGES, null)
             ?: dataStore.data.first()[DATASTORE_KEY_MESSAGES]?.also { migratedValue ->
+                // Recover history that may have been pulled into DataStore by the earlier
+                // over-broad settings migration, then write it back to the canonical store.
                 sharedPreferences.edit { putString(KEY_MESSAGES, migratedValue) }
             }
             ?: return emptyList()

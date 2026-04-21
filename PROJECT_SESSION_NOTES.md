@@ -45,6 +45,7 @@ Important implication:
 - Settings persistence and chat-message persistence are now split across two storage mechanisms
 - Do not remove the `SharedPreferences` Hilt provider unless `ChatRepository` is migrated too
 - Do not switch `SharedPreferencesMigration` back to whole-file migration unless chat persistence is migrated at the same time
+- At the moment, no second confirmed persistence bug of the same class has been found, but this split storage design remains the main place where similar bugs could reappear
 
 ## Current TTS Architecture
 
@@ -130,6 +131,7 @@ Confirmed source assets:
 - `ChatRepository.loadMessages()` is now suspend-based.
 - If `chat.messages` was already moved into `DataStore` by the earlier over-broad migration, `ChatRepository` now attempts a one-time recovery by reading that migrated value from `DataStore` and writing it back into `SharedPreferences`.
 - `ChatViewModel` now loads chat history asynchronously at startup.
+- A later codebase scan did not find another already-confirmed key in the same category, but future persistence changes should assume this area is fragile.
 
 ## Major PC TTS Service Changes Already Made
 
@@ -359,6 +361,11 @@ Fix:
 - Chat message history still uses `SharedPreferences`.
 - Future refactors must not assume the whole app has already left `SharedPreferences`.
 - This split already caused one real migration bug where chat history appeared to vanish after restart.
+- No second confirmed collision of the same type has been identified yet, but these are the most likely places for recurrence:
+  - `AppModule.kt` migration rules
+  - `SETTINGS_KEYS`
+  - any future addition of unrelated keys into `tsundere_translator_prefs`
+  - continued overloading of `LlmSettings` with unrelated configuration categories
 
 ### Encoding issues still exist in parts of the project
 
@@ -393,6 +400,8 @@ Fix:
 - If phrase pauses remain unacceptable, investigate server-side sentence splitting and synthesis cadence before changing the client again.
 - Consider adding a settings toggle for `split_sentence` if A/B testing is needed.
 - Consider moving TTS settings into a dedicated settings model instead of reusing `LlmSettings`.
+- Consider migrating `chat.messages` out of `SharedPreferences` too, so storage is no longer split across two systems.
+- Add explicit comments near the DataStore migration code explaining that whole-file migration must not be restored.
 - Clean up garbled text encoding in UI and comments.
 - If packaging work continues, only do audited slimming on explicit safe paths.
 

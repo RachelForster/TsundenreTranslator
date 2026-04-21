@@ -34,6 +34,9 @@ object AppModule {
     ): DataStore<Preferences> {
         return PreferenceDataStoreFactory.create(
             migrations = listOf(
+                // Only migrate settings keys. A whole-file migration previously pulled
+                // `chat.messages` out of SharedPreferences while ChatRepository still
+                // depended on that location, which made chat history appear to vanish.
                 SharedPreferencesMigration(
                     context = context,
                     sharedPreferencesName = PREFERENCES_NAME,

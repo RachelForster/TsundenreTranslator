@@ -120,6 +120,9 @@ class GptSoVitsRemoteImpl(
                 )
 
                 if (format == "pcm_s16le") {
+                    // The preferred path is explicit PCM streaming plus AudioTrack.
+                    // This avoids the old "pretend WAV" contract mismatch and lets us
+                    // start playback before the full synthesis finishes.
                     streamPcmToAudioTrack(
                         requestId = resolvedRequestId,
                         inputStream = body.byteStream(),
@@ -568,6 +571,9 @@ class GptSoVitsRemoteImpl(
             return
         }
 
+        // Do not stop immediately after the stream ends. The tail of the audio may
+        // still be queued inside AudioTrack, and stopping too early can cut off the
+        // final syllables even though all samples were already written.
         val waitStartedAt = System.nanoTime()
         val timeoutMs = maxOf(
             1500L,
